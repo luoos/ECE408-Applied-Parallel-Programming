@@ -16,15 +16,16 @@ __global__ void matrixMultiply(float *A, float *B, float *C, int numARows,
                                int numBColumns, int numCRows,
                                int numCColumns) {
   //@@ Insert code to implement matrix multiplication here
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i<numCRows*numCColumns) {
-    int r = i / numCColumns;
-    int c = i % numCColumns;
-    float sum = 0;
-    for(int x = 0; x < numAColumns; x++) {
-      sum = sum + A[r*numAColumns+x] * B[x*numBColumns+c];
+  int Row = blockIdx.y*blockDim.y + threadIdx.y;
+  int Col = blockIdx.x*blockDim.x + threadIdx.x;
+
+  if ((Row < numCRows) && (Col < numCColumns)) {
+    float value = 0;
+    for (int k = 0; k < numAColumns; k++) {
+      value += A[Row*numAColumns + k] *
+               B[k*numBColumns + Col];
     }
-    C[i] = sum;
+    C[Row*numCColumns+Col] = value;
   }
 }
 
@@ -82,8 +83,8 @@ int main(int argc, char **argv) {
   wbTime_stop(GPU, "Copying input memory to the GPU.");
 
   //@@ Initialize the grid and block dimensions here
-  dim3 DimBlock(256, 1, 1);
-  dim3 DimGrid(ceil((numCRows * numCColumns)/256.0), 1, 1);
+  dim3 DimBlock(16, 16, 1);
+  dim3 DimGrid(ceil(numCColumns/16.0), ceil(numCRows/16.0), 1);
 
   wbTime_start(Compute, "Performing CUDA computation");
   //@@ Launch the GPU Kernel here
@@ -91,7 +92,6 @@ int main(int argc, char **argv) {
                                         numARows, numAColumns,
                                         numBRows, numBColumns,
                                         numCRows, numCColumns);
-
 
   cudaDeviceSynchronize();
   wbTime_stop(Compute, "Performing CUDA computation");
@@ -116,4 +116,3 @@ int main(int argc, char **argv) {
 
   return 0;
 }
-
