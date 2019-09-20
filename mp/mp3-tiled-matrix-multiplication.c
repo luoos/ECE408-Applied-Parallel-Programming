@@ -10,7 +10,7 @@
     }                                                                     \
   } while (0)
 
-#define TILE_WIDTH 4  // IMPORTANT, Width % TILE_WIDTH should equal to 0
+#define TILE_WIDTH 16
 
 // Compute C = A * B
 __global__ void matrixMultiplyShared(float *A, float *B, float *C,
@@ -28,16 +28,30 @@ __global__ void matrixMultiplyShared(float *A, float *B, float *C,
   int Row = by * TILE_WIDTH + ty;
   int Col = bx * TILE_WIDTH + tx;
   float value = 0;
-  for (int m = 0; m < numAColumns/TILE_WIDTH; m++) {
-    subTileA[ty][tx] = A[Row*numAColumns + m*TILE_WIDTH+tx];  
-    subTileB[ty][tx] = B[(m*TILE_WIDTH + ty)*numBColumns + Col];  
+  for (int m = 0; m < (numAColumns-1)/TILE_WIDTH + 1; m++) {
+    if (Row < numARows && m*TILE_WIDTH+tx < numAColumns) {
+      subTileA[ty][tx] = A[Row*numAColumns + m*TILE_WIDTH+tx];
+    } else {
+      subTileA[ty][tx] = 0;
+    }
+
+    if (m*TILE_WIDTH + ty < numBRows && Col < numBColumns) {
+      subTileB[ty][tx] = B[(m*TILE_WIDTH + ty)*numBColumns + Col];
+    } else {
+      subTileB[ty][tx] = 0;
+    }
     __syncthreads();
-    for (int k = 0; k < TILE_WIDTH; k++) {
-      value += subTileA[ty][k] * subTileB[k][tx];
+
+    if (Row < numARows && Col < numBColumns) {
+      for (int k = 0; k < TILE_WIDTH; k++) {
+        value += subTileA[ty][k] * subTileB[k][tx];
+      }
     }
     __syncthreads();
   }
-  C[Row*numCColumns + Col] = value;
+  if (Row < numARows && Col < numBColumns) {
+    C[Row*numCColumns + Col] = value;
+  }
 }
 
 int main(int argc, char **argv) {
