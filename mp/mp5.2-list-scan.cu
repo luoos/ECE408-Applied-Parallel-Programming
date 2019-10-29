@@ -6,7 +6,8 @@
 
 #include <wb.h>
 
-#define BLOCK_SIZE 512 //@@ You can change this
+#define BLOCK_SIZE 512
+#define SECTION_SIZE BLOCK_SIZE * 2
 
 #define wbCheck(stmt)                                                     \
   do {                                                                    \
@@ -18,19 +19,52 @@
     }                                                                     \
   } while (0)
 
-__global__ void scan(float *input, float *output, int len) {
-  //@@ Modify the body of this function to complete the functionality of
-  //@@ the scan on the device
-  //@@ You may need multiple kernel calls; write your kernels before this
-  //@@ function and call them from the host
-  int tx = threadIdx.x;
-  int output_index = blockIdx.x*blockDim.x + tx;
-  float acc = 0.0;
-  if (output_index < len) {
-    for (int i = 0; i <= output_index; i++) {
-      acc += input[i];
+__global__ void scan(float *X, float *Y, float *S, int inputSize, int const section_size) {
+  // Use Brent-Kung algorithm
+
+  // CAUTION! the length parameter of shared memory should be a constant,
+  // SECTION_SIZE should be bigger than section_size
+  __shared__ float XY[SECTION_SIZE];
+
+  int i = 2*blockIdx.x*blockDim.x + threadIdx.x;
+  if (i < inputSize) XY[threadIdx.x] = X[i];
+  if (i+blockDim.x < inputSize) XY[threadIdx.x+blockDim.x] = X[i+blockDim.x];
+
+  // Reduection
+  for (unsigned int stride = 1; stride <= blockDim.x; stride *= 2) {
+    __syncthreads();
+    int index = (threadIdx.x+1) * 2* stride -1;
+    if (index < section_size) {
+      XY[index] += XY[index - stride];
     }
-    output[output_index] = acc;
+  }
+
+  // Distribution
+  for (int stride = section_size/4; stride > 0; stride /= 2) {
+    __syncthreads();
+    int index = (threadIdx.x+1)*stride*2 - 1;
+    if(index + stride < section_size) {
+      XY[index + stride] += XY[index];
+    }
+  }
+
+  __syncthreads();
+  if (i < inputSize) Y[i] = XY[threadIdx.x];
+  if (i+blockDim.x < inputSize) Y[i+blockDim.x] = XY[threadIdx.x+blockDim.x];
+
+
+  if (S) {
+    __syncthreads();
+    if (threadIdx.x == (blockDim.x-1)) {
+      S[blockIdx.x] = XY[section_size-1];
+    }
+  }
+}
+
+__global__ void sumUp(float *S, float *Y, int len) {
+  int i = blockIdx.x*blockDim.x + threadIdx.x;
+  if (i < len && blockIdx.x > 0) {
+    Y[i] += S[blockIdx.x-1];
   }
 }
 
@@ -66,14 +100,26 @@ int main(int argc, char **argv) {
                      cudaMemcpyHostToDevice));
   wbTime_stop(GPU, "Copying input memory to the GPU.");
 
-  //@@ Initialize the grid and block dimensions here
-  dim3 DimBlock(BLOCK_SIZE, 1, 1);
-  dim3 DimGrid(ceil(numElements/(BLOCK_SIZE*1.0)), 1, 1);
+  // Define some vars
+  int SECTION_CNT = ceil(numElements/(SECTION_SIZE)*1.0);
+  float *auxiliary;
+  cudaMalloc((void **) &auxiliary, SECTION_CNT * sizeof(float));
 
   wbTime_start(Compute, "Performing CUDA computation");
-  //@@ Modify this to complete the functionality of the scan
-  //@@ on the deivce
-  scan<<<DimGrid, DimBlock>>>(deviceInput, deviceOutput, numElements);
+  // Phase 1
+  dim3 DimBlock(BLOCK_SIZE, 1, 1);
+  dim3 DimGrid(ceil(numElements/(SECTION_SIZE*1.0)), 1, 1);
+  scan<<<DimGrid, DimBlock>>>(deviceInput, deviceOutput, auxiliary, numElements, SECTION_SIZE);
+  
+  // Phase 2
+  dim3 DimBlock2(ceil(SECTION_CNT/2.0), 1, 1);
+  dim3 DimGrid2(1, 1, 1);
+  scan<<<DimGrid2, DimBlock2>>>(auxiliary, auxiliary, NULL, SECTION_CNT, SECTION_CNT);
+
+  // Phase 3
+  dim3 DimBlock3(SECTION_SIZE, 1, 1);
+  dim3 DimGrid3(ceil(numElements/(SECTION_SIZE*1.0)), 1, 1);
+  sumUp<<<DimGrid3, DimBlock3>>>(auxiliary, deviceOutput, numElements);
 
   cudaDeviceSynchronize();
   wbTime_stop(Compute, "Performing CUDA computation");
