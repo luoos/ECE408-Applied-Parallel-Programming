@@ -40,7 +40,7 @@ __global__ void scan(float *X, float *Y, float *S, int inputSize, int const sect
   }
 
   // Distribution
-  for (int stride = section_size/4; stride > 0; stride /= 2) {
+  for (int stride = ceil(section_size/4.0); stride > 0; stride /= 2) {
     __syncthreads();
     int index = (threadIdx.x+1)*stride*2 - 1;
     if(index + stride < section_size) {
@@ -110,18 +110,20 @@ int main(int argc, char **argv) {
   dim3 DimBlock(BLOCK_SIZE, 1, 1);
   dim3 DimGrid(ceil(numElements/(SECTION_SIZE*1.0)), 1, 1);
   scan<<<DimGrid, DimBlock>>>(deviceInput, deviceOutput, auxiliary, numElements, SECTION_SIZE);
+  cudaDeviceSynchronize();
   
   // Phase 2
   dim3 DimBlock2(ceil(SECTION_CNT/2.0), 1, 1);
   dim3 DimGrid2(1, 1, 1);
   scan<<<DimGrid2, DimBlock2>>>(auxiliary, auxiliary, NULL, SECTION_CNT, SECTION_CNT);
+  cudaDeviceSynchronize();
 
   // Phase 3
   dim3 DimBlock3(SECTION_SIZE, 1, 1);
   dim3 DimGrid3(ceil(numElements/(SECTION_SIZE*1.0)), 1, 1);
   sumUp<<<DimGrid3, DimBlock3>>>(auxiliary, deviceOutput, numElements);
-
   cudaDeviceSynchronize();
+
   wbTime_stop(Compute, "Performing CUDA computation");
 
   wbTime_start(Copy, "Copying output memory to the CPU");
