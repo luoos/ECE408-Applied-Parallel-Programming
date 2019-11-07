@@ -19,9 +19,6 @@ typedef unsigned char uint8_t;
 #define HISTOGRAM_LENGTH 256
 #define BLOCK_SIZE 512
 
-
-//@@ insert code here
-
 // Kernel 1: float -> unsigned char
 __global__ void cast(float *input, uint8_t *output, int len) {
   int idx = threadIdx.x + blockIdx.x*blockDim.x;
@@ -95,12 +92,17 @@ __global__ void scan(int *histogram, float *cdf, int len, int pixelLs) {
 
 // Kernel 5
 __global__ void correctColor(uint8_t *ucharImage, float *cdf, int len) {
-
+  __shared__ float scdf[HISTOGRAM_LENGTH];
   int idx = blockIdx.x*blockDim.x + threadIdx.x;
+
+  if (threadIdx.x < HISTOGRAM_LENGTH) {
+    scdf[threadIdx.x] = cdf[threadIdx.x];
+  }
+  __syncthreads();
 
   if (idx < len) {
     uint8_t val = ucharImage[idx];
-    float tmp = 255 * (cdf[val] - cdf[0]) / (1.0 - cdf[0]);
+    float tmp = 255 * (scdf[val] - scdf[0]) / (1.0 - scdf[0]);
     ucharImage[idx] = (uint8_t) (min(max(tmp, 0.0), 255.0));
   }
 }
@@ -114,33 +116,32 @@ __global__ void castBack(uint8_t *ucharImage, float *outputImage, int len) {
 }
 
 int main(int argc, char **argv) {
-  wbArg_t args;
-  int imageWidth;
-  int imageHeight;
-  int imageChannels;
-  wbImage_t inputImage;
-  wbImage_t outputImage;
+  wbArg_t     args;
+  int         imageWidth;
+  int         imageHeight;
+  int         imageChannels;
+  wbImage_t   inputImage;
+  wbImage_t   outputImage;
   float       *hostInputImageData;
   float       *hostOutputImageData;
   float       *deviceImageData;
   uint8_t     *deviceGrayImage;
   int         *deviceHistogram;
   float       *devicecdf;
+  uint8_t     *deviceUncharImage;
   const char  *inputImageFile;
-
-  uint8_t *deviceUncharImage;
 
   args = wbArg_read(argc, argv); /* parse the input arguments */
 
   inputImageFile = wbArg_getInputFile(args, 0);
 
   wbTime_start(Generic, "Importing data and creating memory on host");
-  inputImage = wbImport(inputImageFile);
-  imageWidth = wbImage_getWidth(inputImage);
-  imageHeight = wbImage_getHeight(inputImage);
-  imageChannels = wbImage_getChannels(inputImage);
-  hostInputImageData = wbImage_getData(inputImage);
-  outputImage = wbImage_new(imageWidth, imageHeight, imageChannels);
+  inputImage          = wbImport(inputImageFile);
+  imageWidth          = wbImage_getWidth(inputImage);
+  imageHeight         = wbImage_getHeight(inputImage);
+  imageChannels       = wbImage_getChannels(inputImage);
+  hostInputImageData  = wbImage_getData(inputImage);
+  outputImage         = wbImage_new(imageWidth, imageHeight, imageChannels);
   wbTime_stop(Generic, "Importing data and creating memory on host");
 
   int imagePixelLs = imageWidth * imageHeight;
@@ -197,7 +198,6 @@ int main(int argc, char **argv) {
   wbImage_setData(outputImage, hostOutputImageData);
   wbSolution(args, outputImage);
 
-  //@@ insert code here
   cudaFree(deviceUncharImage);
   cudaFree(devicecdf);
   cudaFree(deviceGrayImage);
